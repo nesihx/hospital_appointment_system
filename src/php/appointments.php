@@ -17,71 +17,48 @@ $stmt->execute();
 $result = $stmt->get_result();
 $user = $result->fetch_assoc();
 
-// Get upcoming appointments
+// Handle appointment cancellation
+if (isset($_POST['cancel_appointment'])) {
+    $appointment_id = $_POST['appointment_id'];
+    $query = "UPDATE appointments SET status = 'cancelled' WHERE id = ? AND patient_id = ?";
+    $stmt = $conn->prepare($query);
+    $stmt->bind_param("ii", $appointment_id, $user_id);
+    $stmt->execute();
+}
+
+// Get all appointments
 $query = "SELECT a.*, d.name as doctor_name, d.surname as doctor_surname, d.department, d.specialization, d.image_url 
           FROM appointments a 
           JOIN doctors d ON a.doctor_id = d.id 
-          WHERE a.patient_id = ? AND a.appointment_date >= CURDATE() 
-          ORDER BY a.appointment_date, a.appointment_time 
-          LIMIT 5";
+          WHERE a.patient_id = ? 
+          ORDER BY a.appointment_date DESC, a.appointment_time DESC";
 $stmt = $conn->prepare($query);
 $stmt->bind_param("i", $user_id);
 $stmt->execute();
 $appointments = $stmt->get_result();
 
-// Get departments with doctor count
-$query = "SELECT department, COUNT(*) as doctor_count FROM doctors GROUP BY department";
-$departments = $conn->query($query);
-
-// Get total appointments count
-$query = "SELECT COUNT(*) as total FROM appointments WHERE patient_id = ?";
+// Get appointment statistics
+$query = "SELECT 
+            COUNT(*) as total,
+            SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
+            SUM(CASE WHEN status = 'confirmed' THEN 1 ELSE 0 END) as confirmed,
+            SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) as cancelled
+          FROM appointments 
+          WHERE patient_id = ?";
 $stmt = $conn->prepare($query);
 $stmt->bind_param("i", $user_id);
 $stmt->execute();
-$total_appointments = $stmt->get_result()->fetch_assoc()['total'];
-
-// Get upcoming appointments count
-$query = "SELECT COUNT(*) as upcoming FROM appointments WHERE patient_id = ? AND appointment_date >= CURDATE()";
-$stmt = $conn->prepare($query);
-$stmt->bind_param("i", $user_id);
-$stmt->execute();
-$upcoming_appointments = $stmt->get_result()->fetch_assoc()['upcoming'];
-
-// Handle appointment creation
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create_appointment'])) {
-    $doctor_id = $_POST['doctor_id'];
-    $appointment_date = $_POST['appointment_date'];
-    $appointment_time = $_POST['appointment_time'];
-    $notes = $_POST['notes'];
-
-    $query = "INSERT INTO appointments (patient_id, doctor_id, appointment_date, appointment_time, notes, status) 
-              VALUES (?, ?, ?, ?, ?, 'pending')";
-    $stmt = $conn->prepare($query);
-    $stmt->bind_param("iisss", $user_id, $doctor_id, $appointment_date, $appointment_time, $notes);
-    
-    if ($stmt->execute()) {
-        $success_message = "Randevunuz başarıyla oluşturuldu!";
-        // Refresh the page to show new appointment
-        header("Location: home.php?success=1");
-        exit();
-    } else {
-        $error_message = "Randevu oluşturulurken bir hata oluştu.";
-    }
-}
+$stats = $stmt->get_result()->fetch_assoc();
 ?>
 
 <!DOCTYPE html>
 <html lang="tr">
-
 <head>
-    <!--Meta-->
     <meta charset="UTF-8" />
     <meta http-equiv="X-UA-Compatible" content="IE=edge" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Ana Sayfa - Memorial Sağlık Grubu</title>
+    <title>Randevularım - Memorial Sağlık Grubu</title>
     <link rel="icon" type="image/x-icon" href="../../src/img/favicon.ico" />
-
-    <!--CSS-->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet" />
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <style>
@@ -97,22 +74,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create_appointment'])
         }
 
         body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background-color: var(--light-bg);
             color: var(--dark-text);
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
         }
 
         .navbar {
             background-color: var(--primary-color);
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            padding: 1rem 0;
         }
 
         .navbar-brand {
             color: white !important;
             font-weight: bold;
+            font-size: 1.5rem;
         }
 
-        .welcome-section {
+        .nav-link {
+            color: rgba(255,255,255,0.9) !important;
+            font-weight: 500;
+            padding: 0.5rem 1rem !important;
+            transition: all 0.3s ease;
+        }
+
+        .nav-link:hover {
+            color: white !important;
+            transform: translateY(-2px);
+        }
+
+        .nav-link.active {
+            color: white !important;
+            background: rgba(255,255,255,0.1);
+            border-radius: 20px;
+        }
+
+        .page-header {
             background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
             color: white;
             padding: 3rem 0;
@@ -121,7 +118,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create_appointment'])
             overflow: hidden;
         }
 
-        .welcome-section::before {
+        .page-header::before {
             content: '';
             position: absolute;
             top: 0;
@@ -132,7 +129,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create_appointment'])
             opacity: 0.1;
         }
 
-        .welcome-content {
+        .page-header-content {
             position: relative;
             z-index: 1;
         }
@@ -154,7 +151,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create_appointment'])
 
         .stats-icon {
             font-size: 2.5rem;
-            color: var(--secondary-color);
             margin-bottom: 1rem;
         }
 
@@ -195,34 +191,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create_appointment'])
             box-shadow: 0 3px 10px rgba(0,0,0,0.1);
         }
 
-        .department-card {
-            background: white;
-            border-radius: 15px;
-            padding: 1.5rem;
-            margin-bottom: 1rem;
-            box-shadow: 0 5px 15px rgba(0,0,0,0.05);
-            transition: all 0.3s ease;
-            height: 100%;
-        }
-
-        .department-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 8px 25px rgba(0,0,0,0.1);
-        }
-
-        .btn-primary {
-            background-color: var(--secondary-color);
-            border: none;
-            padding: 0.8rem 1.5rem;
-            border-radius: 25px;
-            transition: all 0.3s ease;
-        }
-
-        .btn-primary:hover {
-            background-color: var(--primary-color);
-            transform: translateY(-2px);
-        }
-
         .status-badge {
             padding: 0.5rem 1rem;
             border-radius: 20px;
@@ -245,6 +213,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create_appointment'])
             color: white;
         }
 
+        .btn-cancel {
+            background-color: var(--danger-color);
+            color: white;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 20px;
+            transition: all 0.3s ease;
+        }
+
+        .btn-cancel:hover {
+            background-color: #c0392b;
+            transform: translateY(-2px);
+        }
+
         .section-title {
             position: relative;
             margin-bottom: 2rem;
@@ -261,35 +243,41 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create_appointment'])
             background: var(--secondary-color);
         }
 
-        .quick-actions {
-            display: flex;
-            gap: 1rem;
-            margin-bottom: 2rem;
-        }
-
-        .quick-action-btn {
-            flex: 1;
+        .filter-section {
             background: white;
-            border: none;
             border-radius: 15px;
-            padding: 1rem;
-            text-align: center;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
             box-shadow: 0 5px 15px rgba(0,0,0,0.05);
-            transition: all 0.3s ease;
-            color: var(--dark-text);
-            text-decoration: none;
         }
 
-        .quick-action-btn:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 8px 25px rgba(0,0,0,0.1);
-            color: var(--secondary-color);
-        }
-
-        .quick-action-btn i {
-            font-size: 1.5rem;
+        .filter-btn {
+            background: var(--light-bg);
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 20px;
+            margin-right: 0.5rem;
             margin-bottom: 0.5rem;
+            transition: all 0.3s ease;
+        }
+
+        .filter-btn:hover, .filter-btn.active {
+            background: var(--secondary-color);
+            color: white;
+        }
+
+        .no-appointments {
+            text-align: center;
+            padding: 3rem;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.05);
+        }
+
+        .no-appointments i {
+            font-size: 4rem;
             color: var(--secondary-color);
+            margin-bottom: 1rem;
         }
     </style>
 </head>
@@ -307,13 +295,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create_appointment'])
             <div class="collapse navbar-collapse" id="navbarNav">
                 <ul class="navbar-nav ms-auto">
                     <li class="nav-item">
-                        <a class="nav-link active" href="home.php">Ana Sayfa</a>
+                        <a class="nav-link" href="home.php">Ana Sayfa</a>
                     </li>
                     <li class="nav-item">
                         <a class="nav-link" href="doctors.php">Doktorlarımız</a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="appointments.php">Randevularım</a>
+                        <a class="nav-link active" href="appointments.php">Randevularım</a>
                     </li>
                     <li class="nav-item">
                         <a class="nav-link" href="logout.php">Çıkış Yap</a>
@@ -323,13 +311,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create_appointment'])
         </div>
     </nav>
 
-    <!-- Welcome Section -->
-    <section class="welcome-section">
-        <div class="container welcome-content">
+    <!-- Page Header -->
+    <section class="page-header">
+        <div class="container page-header-content">
             <div class="row align-items-center">
                 <div class="col-md-8">
-                    <h1 class="display-4 mb-3">Hoş Geldiniz, <?php echo htmlspecialchars($user['name'] . ' ' . $user['surname']); ?>!</h1>
-                    <p class="lead mb-0">Sağlığınız için yanınızdayız. Randevularınızı yönetin, doktorlarımızla görüşün.</p>
+                    <h1 class="display-4 mb-3">Randevularım</h1>
+                    <p class="lead mb-0">Tüm randevularınızı buradan görüntüleyebilir ve yönetebilirsiniz.</p>
                 </div>
                 <div class="col-md-4 text-end">
                     <button type="button" class="btn btn-light btn-lg" data-bs-toggle="modal" data-bs-target="#appointmentModal">
@@ -341,115 +329,110 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create_appointment'])
     </section>
 
     <div class="container">
-        <?php if (isset($_GET['success'])): ?>
-            <div class="alert alert-success alert-dismissible fade show" role="alert">
-                Randevunuz başarıyla oluşturuldu!
-                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-            </div>
-        <?php endif; ?>
-
-        <?php if (isset($error_message)): ?>
-            <div class="alert alert-danger alert-dismissible fade show" role="alert">
-                <?php echo $error_message; ?>
-                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-            </div>
-        <?php endif; ?>
-
-        <!-- Quick Actions -->
-        <div class="quick-actions">
-            <a href="doctors.php" class="quick-action-btn">
-                <i class="fas fa-user-md"></i>
-                <div>Doktorlarımız</div>
-            </a>
-            <a href="appointments.php" class="quick-action-btn">
-                <i class="fas fa-calendar-check"></i>
-                <div>Randevularım</div>
-            </a>
-            <a href="#" class="quick-action-btn" data-bs-toggle="modal" data-bs-target="#appointmentModal">
-                <i class="fas fa-calendar-plus"></i>
-                <div>Yeni Randevu</div>
-            </a>
-        </div>
-
-        <div class="row">
-            <!-- Stats Cards -->
-            <div class="col-md-4">
+        <!-- Stats Cards -->
+        <div class="row mb-4">
+            <div class="col-md-3">
                 <div class="stats-card text-center">
-                    <i class="fas fa-calendar-alt stats-icon"></i>
-                    <h3><?php echo $total_appointments; ?></h3>
+                    <i class="fas fa-calendar-alt stats-icon text-primary"></i>
+                    <h3><?php echo $stats['total']; ?></h3>
                     <p class="text-muted">Toplam Randevu</p>
                 </div>
             </div>
-            <div class="col-md-4">
+            <div class="col-md-3">
                 <div class="stats-card text-center">
-                    <i class="fas fa-clock stats-icon"></i>
-                    <h3><?php echo $upcoming_appointments; ?></h3>
-                    <p class="text-muted">Yaklaşan Randevu</p>
+                    <i class="fas fa-clock stats-icon text-warning"></i>
+                    <h3><?php echo $stats['pending']; ?></h3>
+                    <p class="text-muted">Bekleyen Randevu</p>
                 </div>
             </div>
-            <div class="col-md-4">
+            <div class="col-md-3">
                 <div class="stats-card text-center">
-                    <i class="fas fa-user-md stats-icon"></i>
-                    <h3>500+</h3>
-                    <p class="text-muted">Uzman Doktor</p>
+                    <i class="fas fa-check-circle stats-icon text-success"></i>
+                    <h3><?php echo $stats['confirmed']; ?></h3>
+                    <p class="text-muted">Onaylanan Randevu</p>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="stats-card text-center">
+                    <i class="fas fa-times-circle stats-icon text-danger"></i>
+                    <h3><?php echo $stats['cancelled']; ?></h3>
+                    <p class="text-muted">İptal Edilen Randevu</p>
                 </div>
             </div>
         </div>
 
-        <div class="row mt-4">
-            <!-- Upcoming Appointments -->
-            <div class="col-12">
-                <h2 class="section-title">Yaklaşan Randevularınız</h2>
-                <?php if ($appointments->num_rows > 0): ?>
-                    <?php while ($appointment = $appointments->fetch_assoc()): ?>
-                        <div class="appointment-card <?php echo $appointment['status']; ?>">
-                            <div class="row align-items-center">
-                                <div class="col-auto">
-                                    <img src="<?php echo $appointment['image_url'] ?: 'https://via.placeholder.com/60'; ?>" 
-                                         alt="Doctor" class="doctor-image">
-                                </div>
-                                <div class="col">
-                                    <h5 class="mb-2">Dr. <?php echo htmlspecialchars($appointment['doctor_name'] . ' ' . $appointment['doctor_surname']); ?></h5>
-                                    <p class="mb-1">
-                                        <i class="fas fa-stethoscope"></i> <?php echo htmlspecialchars($appointment['department']); ?> - 
-                                        <?php echo htmlspecialchars($appointment['specialization']); ?>
+        <!-- Filter Section -->
+        <div class="filter-section">
+            <h5 class="mb-3">Randevu Filtrele</h5>
+            <div class="filter-buttons">
+                <button class="filter-btn active" data-filter="all">Tümü</button>
+                <button class="filter-btn" data-filter="pending">Bekleyen</button>
+                <button class="filter-btn" data-filter="confirmed">Onaylanan</button>
+                <button class="filter-btn" data-filter="cancelled">İptal Edilen</button>
+            </div>
+        </div>
+
+        <!-- Appointments List -->
+        <div class="appointments-list">
+            <?php if ($appointments->num_rows > 0): ?>
+                <?php while ($appointment = $appointments->fetch_assoc()): ?>
+                    <div class="appointment-card <?php echo $appointment['status']; ?>" data-status="<?php echo $appointment['status']; ?>">
+                        <div class="row align-items-center">
+                            <div class="col-auto">
+                                <img src="<?php echo $appointment['image_url'] ?: 'https://via.placeholder.com/60'; ?>" 
+                                     alt="Doctor" class="doctor-image">
+                            </div>
+                            <div class="col">
+                                <h5 class="mb-2">Dr. <?php echo htmlspecialchars($appointment['doctor_name'] . ' ' . $appointment['doctor_surname']); ?></h5>
+                                <p class="mb-1">
+                                    <i class="fas fa-stethoscope"></i> <?php echo htmlspecialchars($appointment['department']); ?> - 
+                                    <?php echo htmlspecialchars($appointment['specialization']); ?>
+                                </p>
+                                <p class="mb-1">
+                                    <i class="fas fa-calendar"></i> <?php echo date('d.m.Y', strtotime($appointment['appointment_date'])); ?> - 
+                                    <i class="fas fa-clock"></i> <?php echo date('H:i', strtotime($appointment['appointment_time'])); ?>
+                                </p>
+                                <?php if ($appointment['notes']): ?>
+                                    <p class="mb-0 text-muted">
+                                        <i class="fas fa-comment"></i> <?php echo htmlspecialchars($appointment['notes']); ?>
                                     </p>
-                                    <p class="mb-1">
-                                        <i class="fas fa-calendar"></i> <?php echo date('d.m.Y', strtotime($appointment['appointment_date'])); ?> - 
-                                        <i class="fas fa-clock"></i> <?php echo date('H:i', strtotime($appointment['appointment_time'])); ?>
-                                    </p>
-                                    <?php if ($appointment['notes']): ?>
-                                        <p class="mb-0 text-muted">
-                                            <i class="fas fa-comment"></i> <?php echo htmlspecialchars($appointment['notes']); ?>
-                                        </p>
-                                    <?php endif; ?>
-                                </div>
-                                <div class="col-auto">
-                                    <span class="status-badge <?php echo $appointment['status']; ?>">
-                                        <?php
-                                        switch($appointment['status']) {
-                                            case 'pending':
-                                                echo 'Beklemede';
-                                                break;
-                                            case 'confirmed':
-                                                echo 'Onaylandı';
-                                                break;
-                                            case 'cancelled':
-                                                echo 'İptal Edildi';
-                                                break;
-                                        }
-                                        ?>
-                                    </span>
-                                </div>
+                                <?php endif; ?>
+                            </div>
+                            <div class="col-auto">
+                                <span class="status-badge <?php echo $appointment['status']; ?>">
+                                    <?php
+                                    switch($appointment['status']) {
+                                        case 'pending':
+                                            echo 'Beklemede';
+                                            break;
+                                        case 'confirmed':
+                                            echo 'Onaylandı';
+                                            break;
+                                        case 'cancelled':
+                                            echo 'İptal Edildi';
+                                            break;
+                                    }
+                                    ?>
+                                </span>
+                                <?php if ($appointment['status'] !== 'cancelled'): ?>
+                                    <form method="POST" class="mt-2" onsubmit="return confirm('Randevuyu iptal etmek istediğinizden emin misiniz?');">
+                                        <input type="hidden" name="appointment_id" value="<?php echo $appointment['id']; ?>">
+                                        <button type="submit" name="cancel_appointment" class="btn btn-cancel">
+                                            <i class="fas fa-times"></i> İptal Et
+                                        </button>
+                                    </form>
+                                <?php endif; ?>
                             </div>
                         </div>
-                    <?php endwhile; ?>
-                <?php else: ?>
-                    <div class="appointment-card">
-                        <p class="text-center mb-0">Henüz randevunuz bulunmamaktadır.</p>
                     </div>
-                <?php endif; ?>
-            </div>
+                <?php endwhile; ?>
+            <?php else: ?>
+                <div class="no-appointments">
+                    <i class="fas fa-calendar-times"></i>
+                    <h3>Henüz Randevunuz Bulunmuyor</h3>
+                    <p class="text-muted">Yeni bir randevu almak için yukarıdaki butonu kullanabilirsiniz.</p>
+                </div>
+            <?php endif; ?>
         </div>
     </div>
 
@@ -519,6 +502,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create_appointment'])
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
+        // Form validation
         document.getElementById('appointmentForm').addEventListener('submit', function(e) {
             const date = document.getElementById('appointment_date').value;
             const time = document.getElementById('appointment_time').value;
@@ -529,7 +513,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create_appointment'])
                 alert('Lütfen tüm gerekli alanları doldurun.');
             }
         });
+
+        // Filter functionality
+        document.querySelectorAll('.filter-btn').forEach(button => {
+            button.addEventListener('click', function() {
+                // Update active button
+                document.querySelectorAll('.filter-btn').forEach(btn => btn.classList.remove('active'));
+                this.classList.add('active');
+
+                const filter = this.dataset.filter;
+                document.querySelectorAll('.appointment-card').forEach(card => {
+                    if (filter === 'all' || card.dataset.status === filter) {
+                        card.style.display = 'block';
+                    } else {
+                        card.style.display = 'none';
+                    }
+                });
+            });
+        });
     </script>
 </body>
-
-</html>
+</html> 
